@@ -29,13 +29,25 @@ class DataPartInfo {
 			return $this->data;
 		}
 
-		if($this->part == 0) {
-			$this->data = $this->mail->imap('body', [$this->id, $this->options]);
-		} else {
-			$this->data = $this->mail->imap('fetchbody', [$this->id, $this->part, $this->options]);
+		switch($this->part) {
+			// Message header
+			case 0:
+				$this->data = $this->mail->imap('fetchheader', [$this->id, $this->options]);
+				break;
+			// MULTIPART/ALTERNATIVE
+			case (preg_match('/1\.?[0-9]*/', $this->part) ? true : false):
+				$this->data = $this->mail->imap('body', [$this->id, $this->part, $this->options]);
+				break;
+			// MESSAGE/RFC822 (Attachment)
+			case (preg_match('/2\.?[0-9]*/', $this->part) ? true : false):
+				$this->data = $this->mail->imap('fetchbody', [$this->id, $this->part, $this->options]);
+				break;
 		}
 
 		switch($this->encoding) {
+			case ENC7BIT:
+				$this->data = $this->data;
+				break;
 			case ENC8BIT:
 				$this->data = imap_utf8($this->data);
 				break;
@@ -48,6 +60,12 @@ class DataPartInfo {
 				break;
 			case ENCQUOTEDPRINTABLE:
 				$this->data = quoted_printable_decode($this->data);
+				break;
+			case ENCOTHER:
+				$this->data = $this->data;
+				break;
+			default:
+				$this->data = $this->data;
 				break;
 		}
 

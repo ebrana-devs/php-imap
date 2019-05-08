@@ -779,118 +779,133 @@ class Mailbox {
 
 		$mailStructure = $this->imap('fetchstructure', [$mailId, ($this->imapSearchOption == SE_UID) ? FT_UID : 0]);
 
-		if(empty($mailStructure->parts)) {
-			$this->initMailPart($mail, $mailStructure, 0, $markAsSeen);
-		}
-		else {
-			foreach($mailStructure->parts as $partNum => $partStructure) {
-				$this->initMailPart($mail, $partStructure, $partNum + 1, $markAsSeen);
-			}
-		}
+		@$this->parseMailPartsRecursive($mail, $mailStructure, '', $markAsSeen);
 
 		return $mail;
 	}
 
-	protected function initMailPart(IncomingMail $mail, $partStructure, $partNum, $markAsSeen = true) {
+	/*
+	 * Parses email parts
+	 *
+	 * @param $mail IncomingMail
+	 * @param $mailStructure Mail / Part structure
+	 * @param $parentSection Parent section
+	 * @param $markAsSeen Mark as seen (true or false)
+	 * @param $isAttachment Section has attachment (true or false)
+	 */
+	protected function parseMailPartsRecursive(IncomingMail $mail, $mailStructure, $parentSection = '', $markAsSeen = true, $isAttachment = false) {
 		// skip all but plain and html when attachments are not required
-		if ($this->getAttachmentsIgnore() && 
-			($partStructure->type !== TYPEMULTIPART && 
-			($partStructure->type !== TYPETEXT || !in_array(strtolower($partStructure->subtype), ['plain','html'])))) {
+		if($this->getAttachmentsIgnore() && 
+			($mailStructure->type !== TYPEMULTIPART && 
+			($mailStructure->type !== TYPETEXT || !in_array(strtolower($mailStructure->subtype), ['plain','html'])))) {
 			return false;
 		}
-		
-		$options = ($this->imapSearchOption == SE_UID) ? FT_UID : 0;
 
+		$options = ($this->imapSearchOption == SE_UID) ? FT_UID : 0;
 		if(!$markAsSeen) {
 			$options |= FT_PEEK;
 		}
-		$dataInfo = new DataPartInfo($this, $mail->id, $partNum, $partStructure->encoding, $options);
-		
-		$params = [];
-		if(!empty($partStructure->parameters)) {
-			foreach($partStructure->parameters as $param) {
-				$params[strtolower($param->attribute)] = $this->decodeMimeStr($param->value);
-			}
-		}
-		if(!empty($partStructure->dparameters)) {
-			foreach($partStructure->dparameters as $param) {
-				$paramName = strtolower(preg_match('~^(.*?)\*~', $param->attribute, $matches) ? $matches[1] : $param->attribute);
-				if(isset($params[$paramName])) {
-					$params[$paramName] .= $param->value;
-				}
-				else {
-					$params[$paramName] = $param->value;
-				}
-			}
+
+		if(isset($mailStructure->parts)) {
+			$parts = $mailStructure->parts;
+		} else {
+			$parts = array($mailStructure);
 		}
 
-		$isAttachment = isset($params['filename']) || isset($params['name']);
+		foreach($parts as $subSection => $part) {
+			$section = $parentSection . ($subSection + 1);
+			$dataInfo = new DataPartInfo($this, $mail->id, $section, $part->encoding, $options);
+var_dump($section);
 
-		// ignore contentId on body when mail isn't multipart (https://github.com/barbushin/php-imap/issues/71)
-		if(!$partNum && TYPETEXT === $partStructure->type) {
 			$isAttachment = false;
-		}
-
-		if($isAttachment) {
-			$attachmentId = mt_rand() . mt_rand();
-
-			if(empty($params['filename']) && empty($params['name'])) {
-				$fileName = $attachmentId . '.' . strtolower($partStructure->subtype);
-			}
-			else {
-				$fileName = !empty($params['filename']) ? $params['filename'] : $params['name'];
-				$fileName = $this->decodeMimeStr($fileName, $this->serverEncoding);
-				$fileName = $this->decodeRFC2231($fileName, $this->serverEncoding);
+			if(preg_match('/2\.?[0-9]*/', $section) AND (strtolower($part->subtype) != 'rfc822')) {
+				echo "ATTACH!!!\n";
+			//if($part->ifdisposition) {
+				$isAttachment = true;
+				//(in_array(strtolower($part->disposition), array('attachment','inline'))) ? true : false;
 			}
 
-			$attachment = new IncomingMailAttachment();
-			$attachment->id = $attachmentId;
-			$attachment->contentId = $partStructure->ifid ? trim($partStructure->id, " <>") : null;
-			$attachment->name = $fileName;
-			$attachment->disposition = (isset($partStructure->disposition) ? $partStructure->disposition : null);
-			if($this->attachmentsDir) {
-				$replace = [
-					'/\s/' => '_',
-					'/[^\w\.]/iu' => '',
-					'/_+/' => '_',
-					'/(^_)|(_$)/' => '',
-				];
-				$fileSysName = preg_replace('~[\\\\/]~', '', $mail->id . '_' . $attachmentId . '_' . preg_replace(array_keys($replace), $replace, $fileName));
-				$filePath = $this->attachmentsDir . DIRECTORY_SEPARATOR . $fileSysName;
+			// ignore contentId on body when mail isn't multipart (https://github.com/barbushin/php-imap/issues/71)
+			if(!$section && TYPETEXT === $part->type) {
+				$isAttachment = false;
+			}
 
-				if(strlen($filePath) > 255) {
-					$ext = pathinfo($filePath, PATHINFO_EXTENSION);
-					$filePath = substr($filePath, 0, 255 - 1 - strlen($ext)) . "." . $ext;
+			$partHasFile = true;
+			if(in_array(strtolower($part->subtype), array(
+					'mixed',
+					'alternative',
+					'rfc822'
+				))) {
+				$partHasFile = false;
+			}
+
+			// $part is attachment
+			//if($isAttachment AND $partHasFile) {
+			if($isAttachment) {
+				$attachmentId = mt_rand() . mt_rand();
+				if($part->ifdparameters AND (strtolower($part->dparameters[0]->attribute) == 'filename')) {
+					// Optional filename is given
+					$fileName = $part->dparameters[0]->value;
+				} elseif($part->ifparameters AND (strtolower($part->parameters[0]->attribute) == 'name')) {
+					// Optional name is given
+					$fileName = $part->parameters[0]->value;
+				} else {
+					// Optional filename is missing. Generating one..
+					$fileName = $attachmentId.'.'.strtolower($part->subtype);
+					$fileName = $this->decodeMimeStr($fileName, $this->getServerEncoding());
+					$fileName = $this->decodeRFC2231($fileName, $this->getServerEncoding());
 				}
-                $attachment->setFilePath($filePath);
-			}
-			$attachment->addDataPartInfo($dataInfo);
-			$mail->addAttachment($attachment);
-		}
-		else {
-			if(!empty($params['charset'])) {
-			    $dataInfo->charset = $params['charset'];
-			}
-			if($partStructure->type === TYPETEXT) {
-				if(strtolower($partStructure->subtype) == 'plain') {
+
+				if(isset($fileName)) {
+					$data = $this->imap('fetchbody', [$mail->id, $section, $options]);
+
+					$attachment = new IncomingMailAttachment();
+					$attachment->id = $attachmentId;
+					$attachment->contentId = $part->ifid ? trim($part->id, " <>") : null;
+					$attachment->name = $fileName;
+					$attachment->disposition = $part->ifdisposition ? $part->disposition : null;
+					if($this->attachmentsDir) {
+						$replace = [
+							'/\s/' => '_',
+							'/[^\w\.]/iu' => '',
+							'/_+/' => '_',
+							'/(^_)|(_$)/' => '',
+						];
+						$fileSysName = preg_replace('~[\\\\/]~', '', $mail->id . '_' . $attachmentId . '_' . preg_replace(array_keys($replace), $replace, $fileName));
+						$filePath = $this->attachmentsDir . DIRECTORY_SEPARATOR . $fileSysName;
+
+						if(strlen($filePath) > 255) {
+							$ext = pathinfo($filePath, PATHINFO_EXTENSION);
+							$filePath = substr($filePath, 0, 255 - 1 - strlen($ext)) . "." . $ext;
+						}
+						$attachment->setFilePath($filePath);
+					}
+					$attachment->addDataPartInfo($dataInfo);
+					$mail->addAttachment($attachment);
+				}
+			} // $part is no attachment
+			else {
+				if($part->ifdparameters AND (strtolower($part->dparameters[0]->attribute) == 'charset')) {
+					$dataInfo->charset = $part->dparameters[0]->value;
+				} elseif($part->ifparameters AND (strtolower($part->parameters[0]->attribute) == 'charset')) {
+					$dataInfo->charset = $part->parameters[0]->value;
+				}
+
+				if($part->type === TYPETEXT) {
+					if(strtolower($part->subtype) == 'plain') {
+						$mail->addDataPartInfo($dataInfo, DataPartInfo::TEXT_PLAIN);
+					} else {
+						$mail->addDataPartInfo($dataInfo, DataPartInfo::TEXT_HTML);
+					}
+				} elseif($part->type === TYPEMESSAGE) {
 					$mail->addDataPartInfo($dataInfo, DataPartInfo::TEXT_PLAIN);
 				}
-				else {
-				    $mail->addDataPartInfo($dataInfo, DataPartInfo::TEXT_HTML);
-				}
 			}
-			elseif($partStructure->type === TYPEMESSAGE) {
-			    $mail->addDataPartInfo($dataInfo, DataPartInfo::TEXT_PLAIN);
-			}
-		}
-		if(!empty($partStructure->parts)) {
-			foreach($partStructure->parts as $subPartNum => $subPartStructure) {
-				if($partStructure->type == 2 && $partStructure->subtype == 'RFC822' && (!isset($partStructure->disposition) || $partStructure->disposition !== "attachment")) {
-					$this->initMailPart($mail, $subPartStructure, $partNum, $markAsSeen);
-				}
-				else {
-					$this->initMailPart($mail, $subPartStructure, $partNum . '.' . ($subPartNum + 1), $markAsSeen);
-				}
+
+			// Check extra dimension, if one exists
+			if(isset($part->parts)) {
+				$nameOfFunction = __FUNCTION__;
+				@$this->$nameOfFunction($mail, $part->parts, $section . ".", $markAsSeen, $isAttachment);
 			}
 		}
 	}
