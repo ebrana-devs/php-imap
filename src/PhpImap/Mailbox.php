@@ -591,16 +591,16 @@ class Mailbox {
 		$mails = $this->imap('fetch_overview', [implode(',', $mailsIds), ($this->imapSearchOption == SE_UID) ? FT_UID : 0]);
 		if(is_array($mails) && count($mails)) {
 			foreach($mails as &$mail) {
-				if(isset($mail->subject)) {
+				if(isset($mail->subject) AND !empty($mail->subject)) {
 					$mail->subject = $this->decodeMimeStr($mail->subject, $this->getServerEncoding());
 				}
-				if(isset($mail->from) AND !empty($head->from)) {
+				if(isset($mail->from) AND !empty($mail->from)) {
 					$mail->from = $this->decodeMimeStr($mail->from, $this->getServerEncoding());
 				}
-				if(isset($mail->sender) AND !empty($head->sender)) {
+				if(isset($mail->sender) AND !empty($mail->sender)) {
 					$mail->sender = $this->decodeMimeStr($mail->sender, $this->getServerEncoding());
 				}
-				if(isset($mail->to)) {
+				if(isset($mail->to) AND !empty($mail->to)) {
 					$mail->to = $this->decodeMimeStr($mail->to, $this->getServerEncoding());
 				}
 			}
@@ -1008,12 +1008,10 @@ class Mailbox {
 	 * @throws Exception
 	 */
 	public function convertStringEncoding($string, $fromEncoding, $toEncoding) {
-		if(preg_match("/default|ascii|windows/i", $fromEncoding) || !$string || $fromEncoding == $toEncoding) {
+		if(preg_match("/default|ascii/i", $fromEncoding) || !$string || $fromEncoding == $toEncoding) {
 			return $string;
 		}
-		if(extension_loaded('mbstring')) {
-			$convertedString = mb_convert_encoding($string, $toEncoding, $fromEncoding);
-		} elseif(function_exists('iconv')) {
+		if(function_exists('iconv')) {
 			$convertedString = iconv($fromEncoding, $toEncoding . '//IGNORE', $string);
 		}
 		if(!$convertedString) {
