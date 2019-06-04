@@ -1011,13 +1011,22 @@ class Mailbox {
 		if(preg_match("/default|ascii/i", $fromEncoding) || !$string || $fromEncoding == $toEncoding) {
 			return $string;
 		}
+		
+		if(extension_loaded('mbstring') && !preg_match("/windows/i", $fromEncoding)) {
+			try {
+				$convertedString = mb_convert_encoding($string, $toEncoding, $fromEncoding);
+				return $convertedString;
+			} catch (\Exception $e)	{}			
+		}
+		
 		if(function_exists('iconv')) {
-			$convertedString = iconv($fromEncoding, $toEncoding . '//IGNORE', $string);
+			try {
+				$convertedString = iconv($fromEncoding, $toEncoding . '//IGNORE', $string);
+				return $convertedString;
+			} catch (\Exception $e)	{}			
 		}
-		if(!$convertedString) {
-			throw new Exception('Mime string encoding conversion failed');
-		}
-		return $convertedString;
+		
+		return $string;
 	}
 
 	public function __destruct() {
